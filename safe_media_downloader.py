@@ -2642,11 +2642,6 @@ def asset_definition_for_path(relative_path: str) -> dict[str, Any]:
     }
 
 
-def canonical_asset_record(relative_path: str) -> Optional[dict[str, Any]]:
-    """Compatibility hook retained for callers; public files use live hashes."""
-    return None
-
-
 def _asset_timestamp_fields(stat: os.stat_result) -> dict[str, Any]:
     modified = datetime.fromtimestamp(stat.st_mtime, timezone.utc)
     if ZoneInfo is not None:
@@ -2760,23 +2755,6 @@ def reconcile_asset_metadata(records: list[dict[str, Any]]) -> dict[str, Any]:
         "unsupported_metadata_policy": "diagnostics use live file metadata and do not create sidecar files",
         "secrets_policy": "support metadata must not include credentials, private identifiers, or local absolute paths",
     }
-
-
-def manifest_csv_text(manifest: dict[str, Any]) -> str:
-    columns = [
-        "asset_id", "path", "title", "purpose", "asset_class", "role", "format", "project_slug",
-        "version", "status", "sensitivity", "source_of_truth", "tags", "aliases", "lineage",
-        "created_utc", "modified_utc", "size_bytes", "sha256", "exists", "metadata_depth",
-    ]
-    buffer = io.StringIO(newline="")
-    writer = csv.DictWriter(buffer, fieldnames=columns, extrasaction="ignore", lineterminator="\n")
-    writer.writeheader()
-    for record in manifest.get("files", []):
-        row = dict(record)
-        row["tags"] = "|".join(str(value) for value in row.get("tags", []))
-        row["aliases"] = "|".join(str(value) for value in row.get("aliases", []))
-        writer.writerow({column: csv_safe(row.get(column, "")) for column in columns})
-    return buffer.getvalue()
 
 
 def support_export_scope_snapshot() -> dict[str, Any]:
@@ -3109,9 +3087,9 @@ def output_recovery_artifact_summary(output_dir: Path, *, max_entries: int = 200
 def download_archive_summary(settings: Any, enabled: Optional[bool] = None) -> dict[str, Any]:
     """Return bounded archive metadata, never IDs or full contents.
 
-    The legacy two-argument form is retained for diagnostics/tests that inspect
-    an older output-folder archive. New runtime callers pass DownloadSettings
-    and receive the active output-variant-scoped archive summary.
+    Current callers pass ``DownloadSettings``. The two-argument form remains a
+    narrow compatibility boundary for diagnostics that inspect the older
+    output-folder archive.
     """
     if isinstance(settings, DownloadSettings):
         if not settings.use_archive:

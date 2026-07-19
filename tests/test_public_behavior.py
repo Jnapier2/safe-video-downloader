@@ -7,6 +7,7 @@ import json
 import tempfile
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 # Helper tests do not need a display. A tiny module stub keeps test discovery
 # deterministic on headless Windows runners and minimal Python distributions.
@@ -21,9 +22,12 @@ sys.modules["tkinter.messagebox"] = tk_stub.messagebox
 sys.modules["tkinter.ttk"] = tk_stub.ttk
 
 from safe_media_downloader import (
+    DownloadSettings,
     HIDE_MEDIA_DEFAULT,
     build_diagnostic_snapshot,
     canonical_url_key,
+    download_archive_summary,
+    prepare_download_archive,
     normalize_cli_urls,
     normalize_urls_with_stats,
     parse_rate_limit,
@@ -33,6 +37,24 @@ from safe_media_downloader import (
 
 
 class PublicBehaviorTests(unittest.TestCase):
+    @staticmethod
+    def default_video_settings(output_dir: Path) -> DownloadSettings:
+        return DownloadSettings(
+            output_dir=output_dir,
+            mode="Video",
+            max_height=1080,
+            custom_format="",
+            include_playlist=False,
+            embed_metadata=True,
+            write_subtitles=False,
+            restrict_filenames=True,
+            use_archive=True,
+            rate_limit_bytes=None,
+            prefer_mp4=True,
+            ffmpeg_location=None,
+            hide_media=False,
+        )
+
     def test_downloaded_media_is_visible_by_default(self) -> None:
         self.assertFalse(HIDE_MEDIA_DEFAULT)
 
@@ -72,6 +94,28 @@ class PublicBehaviorTests(unittest.TestCase):
         redacted = redact_text(f"peer={address}")
         self.assertNotIn(address, redacted)
         self.assertIn("<redacted-ip>", redacted)
+
+    def test_default_variant_imports_the_bounded_legacy_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            output_dir = root / "downloads"
+            output_dir.mkdir()
+            legacy = output_dir / "download-archive.txt"
+            legacy.write_text("youtube abc\nyoutube def\n", encoding="utf-8")
+            state = root / "state"
+            with patch("safe_media_downloader.state_dir", return_value=state):
+                result = prepare_download_archive(self.default_video_settings(output_dir))
+            self.assertEqual(result["status"], "legacy_default_imported")
+            self.assertEqual(Path(result["path"]).read_bytes(), legacy.read_bytes())
+
+    def test_legacy_archive_summary_contract_remains_supported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            output_dir = Path(tmpdir)
+            (output_dir / "download-archive.txt").write_text("one\ntwo\n", encoding="utf-8")
+            summary = download_archive_summary(output_dir, True)
+            self.assertEqual(summary["status"], "ok")
+            self.assertEqual(summary["variant"], "legacy-global")
+            self.assertEqual(summary["entries"], 2)
 
     def test_diagnostic_snapshot_and_zip_are_public_and_local_only(self) -> None:
         blocked_labels = (
