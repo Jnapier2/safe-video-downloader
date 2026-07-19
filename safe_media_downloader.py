@@ -121,7 +121,7 @@ TEXT_PORTABILITY_SCAN_FILES = (
     "LICENSE.md",
     "SECURITY.md",
     "requirements.txt",
-    "tests/test_public_behavior.py",
+    "tests/test_safety_behavior.py",
 )
 
 ASSET_METADATA_SCHEMA_VERSION = "public-support-metadata-v1"
@@ -129,11 +129,11 @@ PROJECT_SLUG = "safe-video-downloader"
 ASSET_DEFINITIONS: tuple[dict[str, Any], ...] = (
     {"asset_id": "SVD-SOURCE", "path": "safe_media_downloader.py", "title": "Application source", "purpose": "GUI and CLI implementation", "asset_class": "source", "role": "runtime", "format": "py", "status": "current", "sensitivity": "public", "source_of_truth": True, "tags": ["python", "yt-dlp"], "aliases": [], "metadata_depth": "file"},
     {"asset_id": "SVD-LAUNCHER", "path": "run_safe_video_downloader.bat", "title": "Windows launcher", "purpose": "Portable GUI launcher", "asset_class": "launcher", "role": "runtime", "format": "bat", "status": "current", "sensitivity": "public", "source_of_truth": True, "tags": ["windows", "launcher"], "aliases": [], "metadata_depth": "file"},
-    {"asset_id": "SVD-README", "path": "README.md", "title": "Project README", "purpose": "Public setup and safety guide", "asset_class": "documentation", "role": "guide", "format": "md", "status": "current", "sensitivity": "public", "source_of_truth": True, "tags": ["documentation"], "aliases": [], "metadata_depth": "file"},
+    {"asset_id": "SVD-README", "path": "README.md", "title": "Project README", "purpose": "Setup and safety guide", "asset_class": "documentation", "role": "guide", "format": "md", "status": "current", "sensitivity": "public", "source_of_truth": True, "tags": ["documentation"], "aliases": [], "metadata_depth": "file"},
     {"asset_id": "SVD-LICENSE", "path": "LICENSE.md", "title": "License", "purpose": "Copyright and use terms", "asset_class": "documentation", "role": "license", "format": "md", "status": "current", "sensitivity": "public", "source_of_truth": True, "tags": ["license"], "aliases": [], "metadata_depth": "file"},
     {"asset_id": "SVD-SECURITY", "path": "SECURITY.md", "title": "Security policy", "purpose": "Vulnerability reporting guidance", "asset_class": "documentation", "role": "security", "format": "md", "status": "current", "sensitivity": "public", "source_of_truth": True, "tags": ["security"], "aliases": [], "metadata_depth": "file"},
     {"asset_id": "SVD-REQUIREMENTS", "path": "requirements.txt", "title": "Runtime dependencies", "purpose": "Pinned runtime dependency", "asset_class": "configuration", "role": "dependencies", "format": "txt", "status": "current", "sensitivity": "public", "source_of_truth": True, "tags": ["dependencies"], "aliases": [], "metadata_depth": "file"},
-    {"asset_id": "SVD-TESTS", "path": "tests/test_public_behavior.py", "title": "Public behavior tests", "purpose": "Offline safety and parsing regression tests", "asset_class": "test", "role": "verification", "format": "py", "status": "current", "sensitivity": "public", "source_of_truth": False, "tags": ["tests"], "aliases": [], "metadata_depth": "file"},
+    {"asset_id": "SVD-TESTS", "path": "tests/test_safety_behavior.py", "title": "Safety behavior tests", "purpose": "Offline safety and parsing regression tests", "asset_class": "test", "role": "verification", "format": "py", "status": "current", "sensitivity": "public", "source_of_truth": False, "tags": ["tests"], "aliases": [], "metadata_depth": "file"},
 )
 
 
@@ -2680,7 +2680,7 @@ def file_metadata_for_manifest(relative_path: str, purpose: Optional[str] = None
         "source_of_truth": bool(definition["source_of_truth"]),
         "tags": list(definition["tags"]),
         "aliases": list(definition["aliases"]),
-        "lineage": "public repository file",
+        "lineage": "tracked application file",
         "metadata_depth": definition["metadata_depth"],
         "absolute_path_exported": False,
     }
@@ -3041,7 +3041,7 @@ def time_trace_summary(run_context: dict[str, Any], logs: list[dict[str, Any]]) 
 
 def troubleshooting_evidence(run_context: dict[str, Any], settings_fingerprint: str, logs: list[dict[str, Any]]) -> dict[str, Any]:
     error_tail = [entry for entry in sanitize_log_entries(logs, limit=50) if entry.get("level", "").lower() in {"error", "debug", "warning"}]
-    return {"command_used_redacted": redact_command_line(sys.argv), "exact_redacted_error_tail": error_tail[-10:], "timestamp_utc": utc_now_iso(), "run_id": redact_text(run_context.get("run_id", "unknown")), "active_config_fingerprint_sha256": settings_fingerprint, "environment_snapshot_reference": "05-system-snapshot.json", "recent_log_tail_reference": "09-recent-log-tail.txt", "public_files_reference": "02-public-files.json", "collection_note": "No web searches, platform probes, installations, repairs, or migrations were performed to create this evidence."}
+    return {"command_used_redacted": redact_command_line(sys.argv), "exact_redacted_error_tail": error_tail[-10:], "timestamp_utc": utc_now_iso(), "run_id": redact_text(run_context.get("run_id", "unknown")), "active_config_fingerprint_sha256": settings_fingerprint, "environment_snapshot_reference": "05-system-snapshot.json", "recent_log_tail_reference": "09-recent-log-tail.txt", "public_files_reference": "02-public-files.json", "collection_note": "Collection is local and read-only; no network probes or system changes are performed."}
 
 
 def run_history_health_summary(jobs_summary: dict[str, Any], logs: list[dict[str, Any]]) -> dict[str, Any]:
@@ -3264,7 +3264,7 @@ def smoke_risk_summary(settings: dict[str, Any], dependencies: dict[str, Any], c
             "duplicate checks, adaptive resilience, visible-media defaults, and final verification remain enabled",
         ],
         "verification_scope": {
-            "offline_checks": ["source syntax", "public unit tests", "diagnostic redaction and archive integrity"],
+            "offline_checks": ["source syntax", "safety unit tests", "diagnostic redaction and archive integrity"],
             "not_exercised": ["real third-party media download", "provider-specific extractor behavior"],
         },
         "distribution_safety": {
@@ -3518,7 +3518,7 @@ def build_diagnostic_archive_entries(snapshot: dict[str, Any]) -> list[tuple[str
         "asset_metadata": {
             "diagnostic_asset": snapshot.get("diagnostic_asset_metadata", {}),
             "public_file_reconciliation": snapshot.get("public_files", {}).get("metadata_reconciliation", {}),
-            "policy": "diagnostics record live hashes for the allowlisted public files and create no sidecar metadata",
+            "policy": "diagnostics record live hashes for allowlisted project files and create no sidecar metadata",
         },
         "excluded_by_default": ["downloaded media", "prior exports", ".venv", "build", "dist", "__pycache__", "browser data", "cookies", "credentials", "raw queued URLs"],
     }
@@ -5276,23 +5276,6 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
     if args.diagnostics_only and not args.diagnostic_export:
         args.diagnostic_export = "auto"
     mode_map = {"video": "Video (best MP4)", "mp3": "Audio (MP3)", "audio-original": "Audio (original/best)"}
-    cli_start = datetime.now(timezone.utc)
-    cli_start_monotonic = time.monotonic()
-    cli_run_id = make_run_id("cli")
-    cli_log_path = default_run_log_path("cli", cli_run_id)
-    prune_old_logs()
-    cli_log_entries: list[dict[str, str]] = []
-    def cli_log(level: str, message: str) -> None:
-        entry = make_log_entry(cli_run_id, level, message)
-        cli_log_entries.append(entry)
-        append_persistent_log_entry(cli_log_path, entry)
-    cli_log("info", "CLI started.")
-    if args.gui_check:
-        snapshot = gui_runtime_snapshot(create_window=True)
-        ok = snapshot.get("status") == "ok"
-        cli_log("info" if ok else "error", f"GUI runtime preflight status: {snapshot.get('status')}")
-        print(safe_json_dumps(snapshot))
-        return 0 if ok else 5
     if args.max_height < 0:
         parser.error("--max-height must be 0 (best) or a positive integer")
     try:
@@ -5317,9 +5300,25 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
         bool(args.smart_resilience),
     )
     if args.path_check:
-        cli_log("info", "Path portability check requested.")
         print(safe_json_dumps(path_portability_snapshot(settings_to_export(settings))))
         return 0
+    cli_start = datetime.now(timezone.utc)
+    cli_start_monotonic = time.monotonic()
+    cli_run_id = make_run_id("cli")
+    cli_log_path = default_run_log_path("cli", cli_run_id)
+    prune_old_logs()
+    cli_log_entries: list[dict[str, str]] = []
+    def cli_log(level: str, message: str) -> None:
+        entry = make_log_entry(cli_run_id, level, message)
+        cli_log_entries.append(entry)
+        append_persistent_log_entry(cli_log_path, entry)
+    cli_log("info", "CLI started.")
+    if args.gui_check:
+        snapshot = gui_runtime_snapshot(create_window=True)
+        ok = snapshot.get("status") == "ok"
+        cli_log("info" if ok else "error", f"GUI runtime preflight status: {snapshot.get('status')}")
+        print(safe_json_dumps(snapshot))
+        return 0 if ok else 5
     try:
         cli_urls = normalize_cli_urls(args.url)
     except ValueError as exc:

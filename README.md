@@ -1,5 +1,7 @@
 # Safe Video Downloader
 
+[![CI](https://github.com/Jnapier2/safe-video-downloader/actions/workflows/ci.yml/badge.svg)](https://github.com/Jnapier2/safe-video-downloader/actions/workflows/ci.yml)
+
 A guarded Windows desktop and command-line client for downloading media you own or are authorized to save. The application wraps `yt-dlp` without shelling out user-supplied URLs and adds explicit rights confirmation, duplicate controls, bounded recovery, stoppable worker isolation, and post-download verification.
 
 ## Why this project exists
@@ -61,6 +63,6 @@ Tests cover URL identity, rate-limit parsing, redaction, and explicit visible-ou
 - No downloaded media, browser profile, cookies, credentials, executable build, or private diagnostic bundle is included in this repository.
 - The source remains copyright-protected; see [LICENSE.md](LICENSE.md).
 
-## Portfolio context
+## Engineering focus
 
-This repository demonstrates defensive desktop automation: explicit authorization, bounded recovery, process ownership, content verification, privacy-aware diagnostics, and an interface that makes safety decisions visible.
+The design emphasizes explicit authorization, bounded recovery, process ownership, content verification, privacy-aware diagnostics, and interfaces that make safety decisions visible.

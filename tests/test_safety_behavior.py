@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import redirect_stdout
+import io
 import unittest
 import sys
 import types
@@ -21,6 +23,7 @@ sys.modules["tkinter.filedialog"] = tk_stub.filedialog
 sys.modules["tkinter.messagebox"] = tk_stub.messagebox
 sys.modules["tkinter.ttk"] = tk_stub.ttk
 
+import safe_media_downloader as app
 from safe_media_downloader import (
     DownloadSettings,
     HIDE_MEDIA_DEFAULT,
@@ -36,7 +39,7 @@ from safe_media_downloader import (
 )
 
 
-class PublicBehaviorTests(unittest.TestCase):
+class SafetyBehaviorTests(unittest.TestCase):
     @staticmethod
     def default_video_settings(output_dir: Path) -> DownloadSettings:
         return DownloadSettings(
@@ -80,6 +83,41 @@ class PublicBehaviorTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             parse_rate_limit("0")
 
+    def test_path_check_leaves_the_application_tree_unchanged(self) -> None:
+        def snapshot(root: Path) -> tuple[list[str], dict[str, bytes]]:
+            directories = sorted(
+                str(path.relative_to(root)) for path in root.rglob("*") if path.is_dir()
+            )
+            files = {
+                str(path.relative_to(root)): path.read_bytes()
+                for path in root.rglob("*")
+                if path.is_file()
+            }
+            return directories, files
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            logs = root / "logs"
+            logs.mkdir()
+            (logs / "SafeVideoDownloader-existing.log").write_text(
+                "existing log must remain unchanged\n",
+                encoding="utf-8",
+            )
+            before = snapshot(root)
+            output = io.StringIO()
+            with (
+                patch.object(app, "app_base_dir", return_value=root),
+                patch.object(app, "prune_old_logs", wraps=app.prune_old_logs) as prune_logs,
+                redirect_stdout(output),
+            ):
+                result = app.run_cli(
+                    ["--path-check", "--output-dir", str(root / "downloads")]
+                )
+            self.assertEqual(result, 0)
+            self.assertEqual(snapshot(root), before)
+            prune_logs.assert_not_called()
+            self.assertIn('"status": "ok"', output.getvalue())
+
     def test_redaction_removes_credentials_and_user_details(self) -> None:
         synthetic_user_path = "C:" + r"\Users\Example\Downloads"
         redacted = redact_text(
@@ -117,7 +155,7 @@ class PublicBehaviorTests(unittest.TestCase):
             self.assertEqual(summary["variant"], "legacy-global")
             self.assertEqual(summary["entries"], 2)
 
-    def test_diagnostic_snapshot_and_zip_are_public_and_local_only(self) -> None:
+    def test_diagnostic_snapshot_and_zip_are_bounded_and_local_only(self) -> None:
         blocked_labels = (
             "chat" + "gpt",
             "drive_" + "vault",
@@ -156,7 +194,7 @@ class PublicBehaviorTests(unittest.TestCase):
             self.assertIn("01-support-summary.md", names)
             self.assertIn("02-public-files.json", names)
 
-    def test_public_source_has_no_legacy_private_integration_labels(self) -> None:
+    def test_source_has_no_legacy_private_integration_labels(self) -> None:
         source = (Path(__file__).resolve().parents[1] / "safe_media_downloader.py").read_text(encoding="utf-8").lower()
         blocked_labels = (
             "chat" + "gpt",

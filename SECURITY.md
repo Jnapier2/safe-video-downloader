@@ -2,7 +2,7 @@
 
 ## Supported version
 
-Security review is focused on the current public branch. Older portfolio snapshots are not maintained.
+Security fixes target the current version on the default branch.
 
 ## Reporting a vulnerability
 
