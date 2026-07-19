@@ -2,11 +2,11 @@
 
 [![CI](https://github.com/Jnapier2/safe-video-downloader/actions/workflows/ci.yml/badge.svg)](https://github.com/Jnapier2/safe-video-downloader/actions/workflows/ci.yml)
 
-A guarded Windows desktop and command-line client for downloading media you own or are authorized to save. The application wraps `yt-dlp` without shelling out user-supplied URLs and adds explicit rights confirmation, duplicate controls, bounded recovery, stoppable worker isolation, and post-download verification.
+A controlled Windows desktop and command-line workflow for retrieving media the user is authorized to retain. Shared planning across both interfaces, explicit rights confirmation, duplicate controls, isolated workers, bounded recovery, and post-download verification make repeated operations more predictable without exposing browser credentials or shelling out user-supplied URLs.
 
-## Design goals
+## Operational controls
 
-General-purpose download engines are capable, but their operational edges can be difficult to manage. This client focuses on a clear, inspectable workflow:
+The workflow is designed to keep authorized retrieval predictable and reviewable:
 
 - require the user to confirm download rights;
 - reject unsupported URL schemes and avoid browser credential or cookie access;
