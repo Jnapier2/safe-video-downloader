@@ -4,7 +4,7 @@
 
 A guarded Windows desktop and command-line client for downloading media you own or are authorized to save. The application wraps `yt-dlp` without shelling out user-supplied URLs and adds explicit rights confirmation, duplicate controls, bounded recovery, stoppable worker isolation, and post-download verification.
 
-## Why this project exists
+## Design goals
 
 General-purpose download engines are capable, but their operational edges can be difficult to manage. This client focuses on a clear, inspectable workflow:
 
@@ -17,7 +17,7 @@ General-purpose download engines are capable, but their operational edges can be
 
 The tool does **not** bypass DRM, authentication, paywalls, access controls, or site policy. It is intended for owned, public-domain, Creative Commons, and otherwise authorized media only.
 
-## Engineering highlights
+## Safety model
 
 - GUI and CLI entry points share the same download planning and verification path.
 - User-provided URLs are passed to the `yt-dlp` Python API, not interpolated into a shell command.
@@ -62,7 +62,3 @@ Tests cover URL identity, rate-limit parsing, redaction, and explicit visible-ou
 - This project does not guarantee that a URL is lawful to download; the user must verify rights and applicable terms.
 - No downloaded media, browser profile, cookies, credentials, executable build, or private diagnostic bundle is included in this repository.
 - The source remains copyright-protected; see [LICENSE.md](LICENSE.md).
-
-## Engineering focus
-
-The design emphasizes explicit authorization, bounded recovery, process ownership, content verification, privacy-aware diagnostics, and interfaces that make safety decisions visible.
