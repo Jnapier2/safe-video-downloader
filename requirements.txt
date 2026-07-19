@@ -1,0 +1,2 @@
+# Known-good runtime dependency for Safe Video Downloader v1.14.1.
+yt-dlp[default]==2026.07.04
