@@ -35,6 +35,7 @@ from safe_media_downloader import (
     normalize_urls_with_stats,
     parse_rate_limit,
     redact_text,
+    validate_public_url,
     write_diagnostic_zip,
 )
 
@@ -69,14 +70,89 @@ class SafetyBehaviorTests(unittest.TestCase):
     def test_url_list_collapses_tracking_only_duplicates(self) -> None:
         urls, duplicates = normalize_urls_with_stats(
             "https://example.org/video?id=7&utm_source=a\n"
-            "https://example.org/video?utm_medium=b&id=7\n"
+            "https://example.org/video?utm_medium=b&id=7\n",
+            resolve_dns=False,
         )
         self.assertEqual(len(urls), 1)
         self.assertEqual(duplicates, 1)
 
     def test_cli_rejects_local_file_schemes(self) -> None:
         with self.assertRaises(ValueError):
-            normalize_cli_urls(["file:///private/video.mp4"])
+            normalize_cli_urls(["file:///private/video.mp4"], resolve_dns=False)
+
+    def test_public_url_guard_preserves_safe_supported_urls_without_dns(self) -> None:
+        urls = (
+            "https://example.org/authorized-media?item=7#chapter-2",
+            "http://8.8.8.8/media",
+            "ftp://example.org/public-domain/media.webm",
+        )
+        for value in urls:
+            with self.subTest(value=value):
+                self.assertEqual(validate_public_url(value, resolve_dns=False), value)
+
+    def test_public_url_guard_rejects_non_public_and_unsafe_inputs_without_dns(self) -> None:
+        rejected = (
+            "file:///private/video.mp4",
+            "https://user:secret@example.org/media",
+            "http://localhost/media",
+            "https://service.local/media",
+            "http://127.0.0.1/media",
+            "http://[::1]/media",
+            "http://10.0.0.5/media",
+            "http://169.254.1.2/media",
+            "http://224.0.0.1/media",
+            "http://240.0.0.1/media",
+            "http://0.0.0.0/media",
+            "https://example.org/media\x00hidden",
+            "https://example.org/media\tother",
+            "https://example.org/" + ("a" * 8192),
+        )
+        for value in rejected:
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    validate_public_url(value, resolve_dns=False)
+
+    def test_dns_results_are_checked_without_live_network_access(self) -> None:
+        public_records = [
+            (app.socket.AF_INET, app.socket.SOCK_STREAM, 6, "", ("93.184.216.34", 443)),
+            (app.socket.AF_INET6, app.socket.SOCK_STREAM, 6, "", ("2606:2800:220:1:248:1893:25c8:1946", 443, 0, 0)),
+        ]
+        private_records = [
+            (app.socket.AF_INET, app.socket.SOCK_STREAM, 6, "", ("10.0.0.5", 443)),
+        ]
+
+        with patch.object(app.socket, "getaddrinfo", return_value=public_records) as resolver:
+            original = "https://example.org/authorized-media?item=7"
+            self.assertEqual(normalize_cli_urls([original]), [original])
+            resolver.assert_called_once_with("example.org", 443, type=app.socket.SOCK_STREAM)
+
+        with patch.object(app.socket, "getaddrinfo", return_value=private_records):
+            with self.assertRaises(ValueError):
+                normalize_urls_with_stats("https://example.org/media")
+
+        for result in ([], [(None, None, None, None, ("not-an-ip", 443))]):
+            with self.subTest(result=result):
+                with patch.object(app.socket, "getaddrinfo", return_value=result):
+                    with self.assertRaises(ValueError):
+                        validate_public_url("https://example.org/media")
+
+        with patch.object(app.socket, "getaddrinfo", side_effect=app.socket.gaierror("offline fixture")):
+            with self.assertRaisesRegex(ValueError, "DNS lookup failed"):
+                validate_public_url("https://example.org/media")
+
+    def test_injected_resolver_supports_ftp_and_rejects_mixed_dns_answers(self) -> None:
+        calls: list[tuple[str, int]] = []
+
+        def resolver(host: str, port: int, **_kwargs: object) -> list[tuple[object, ...]]:
+            calls.append((host, port))
+            return [
+                (None, None, None, None, ("93.184.216.34", port)),
+                (None, None, None, None, ("192.168.1.20", port)),
+            ]
+
+        with self.assertRaises(ValueError):
+            normalize_cli_urls(["ftp://example.org/media.webm"], resolver=resolver)
+        self.assertEqual(calls, [("example.org", 21)])
 
     def test_rate_limit_parser_is_bounded_to_positive_values(self) -> None:
         self.assertEqual(parse_rate_limit("1.5M"), int(1.5 * 1024**2))
