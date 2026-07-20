@@ -11,7 +11,7 @@ GUI and CLI jobs use the same planning and verification path. Format, capacity, 
 The workflow is designed to keep authorized retrieval predictable and reviewable:
 
 - require the user to confirm download rights;
-- reject unsupported URL schemes and avoid browser credential or cookie access;
+- accept only public `http`, `https`, and `ftp` targets, with hostname and resolved-address checks before media retrieval;
 - keep completed media visible by default;
 - prevent repeat work through a download archive and media index;
 - atomically preserve only unfinished queue work for interruption recovery;
@@ -23,6 +23,7 @@ The tool does **not** bypass DRM, authentication, paywalls, access controls, or 
 ## Safety model
 
 - GUI and CLI entry points share the same download planning and verification path.
+- Public-network preflight rejects embedded credentials, local hostnames, and direct or DNS-resolved non-public addresses; the isolated worker checks the boundary again before retrieval.
 - User-provided URLs are passed to the `yt-dlp` Python API, not interpolated into a shell command.
 - Adaptive retry profiles respond to transient network, stale-session, and rate-limit conditions with bounded backoff.
 - Downloads run in an isolated worker process so stop and force-stop actions remain predictable.
@@ -57,11 +58,12 @@ python -m compileall -q safe_media_downloader.py tests
 python -m unittest discover -s tests -v
 ```
 
-Tests cover URL identity, rate-limit parsing, redaction, and explicit visible-output defaults without downloading external media.
+Tests cover the offline public-URL boundary, URL identity, rate-limit parsing, redaction, and explicit visible-output defaults without downloading external media.
 
 ## Boundaries
 
 - Extractor behavior depends on upstream sites and the installed `yt-dlp` version.
+- Public-network preflight is a defense-in-depth check of submitted targets. Redirects, extractor-discovered subresources, and DNS changes occur after validation, so the application should run without access to sensitive internal services.
 - This project does not guarantee that a URL is lawful to download; the user must verify rights and applicable terms.
 - No downloaded media, browser profile, cookies, credentials, executable build, or private diagnostic bundle is included in this repository.
 - The source remains copyright-protected; see [LICENSE.md](LICENSE.md).

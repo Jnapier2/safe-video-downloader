@@ -17,6 +17,14 @@ dist/
 *.spec
 *.exe
 *.zip
+*.part
+*.ytdl
+*.mp3
+*.m4a
+*.mp4
+*.mkv
+*.mov
+*.webm
 
 .idea/
 .vscode/

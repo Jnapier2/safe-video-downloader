@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import ipaddress
 import importlib.metadata
 import io
 import json
@@ -20,6 +21,7 @@ import re
 import secrets
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import threading
@@ -55,6 +57,7 @@ DIAGNOSTIC_EXPORT_SCHEMA_VERSION = "1.14.1"
 DIAGNOSTIC_MAX_FILES = 20
 DIAGNOSTIC_LOG_TAIL_LIMIT = 250
 QUEUE_CAPACITY = 500
+MAX_URL_LENGTH = 8192
 INSTANCE_LOCK_STALE_SECONDS = 24 * 60 * 60
 PUBLIC_DEPENDENCY_REVIEW_DATE = "2026-07-18"
 MAX_HASH_BYTES = 50 * 1024 * 1024
@@ -413,14 +416,99 @@ def canonical_url_key(value: str) -> str:
     return urlunsplit((scheme, netloc, path, urlencode(cleaned_query, doseq=True), ""))
 
 
-def normalize_urls_with_stats(text: str) -> tuple[list[str], int]:
-    """Return valid URL lines plus the number auto-collapsed as duplicates."""
+def _reject_non_public_address(address_text: str, *, require_ip: bool = False) -> None:
+    """Raise when an IP address is not a normal public unicast target."""
+    try:
+        address = ipaddress.ip_address(str(address_text).split("%", 1)[0])
+    except ValueError as exc:
+        if require_ip:
+            raise ValueError("DNS lookup returned an invalid network address.") from exc
+        return
+    if (
+        not address.is_global
+        or address.is_private
+        or address.is_loopback
+        or address.is_link_local
+        or address.is_multicast
+        or address.is_reserved
+        or address.is_unspecified
+    ):
+        raise ValueError("Local, private, and other non-public network targets are blocked.")
+
+
+def validate_public_url(
+    value: str,
+    resolve_dns: bool = True,
+    resolver: Optional[Callable[..., Any]] = None,
+) -> str:
+    """Validate one public media URL without rewriting the accepted value.
+
+    ``resolver`` and ``resolve_dns`` keep tests deterministic while production
+    callers use ``socket.getaddrinfo`` to check every resolved address.
+    """
+    raw = str(value or "")
+    if not raw.strip():
+        raise ValueError("A URL is required.")
+    if len(raw) > MAX_URL_LENGTH or any(ord(character) < 0x20 or ord(character) == 0x7F for character in raw):
+        raise ValueError("The URL is too long or contains unsafe control characters.")
+    url = raw.strip()
+    if any(character.isspace() for character in url):
+        raise ValueError("URLs containing unescaped whitespace are not accepted.")
+    try:
+        parsed = urlsplit(url)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid URL: {exc}") from exc
+    if parsed.scheme.lower() not in {"http", "https", "ftp"} or not parsed.netloc:
+        raise ValueError("Only public http, https, and ftp URLs are accepted.")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("URLs containing embedded usernames or passwords are not accepted.")
+    try:
+        host = (parsed.hostname or "").strip().lower().rstrip(".")
+        parsed_port = parsed.port
+    except ValueError as exc:
+        raise ValueError(f"Invalid URL host or port: {exc}") from exc
+    if not host:
+        raise ValueError("The URL does not contain a valid hostname.")
+    if parsed_port == 0:
+        raise ValueError("URL port 0 is not accepted.")
+    if host in {"localhost", "localhost.localdomain"} or host.endswith((".localhost", ".local")):
+        raise ValueError("Local and private network targets are blocked.")
+
+    _reject_non_public_address(host)
+    if resolve_dns:
+        lookup = resolver or socket.getaddrinfo
+        default_port = {"http": 80, "https": 443, "ftp": 21}[parsed.scheme.lower()]
+        try:
+            records = lookup(host, parsed_port or default_port, type=socket.SOCK_STREAM)
+        except (OSError, UnicodeError) as exc:
+            raise ValueError("DNS lookup failed for the URL hostname.") from exc
+        addresses = {str(record[4][0]) for record in records if record and len(record) > 4 and record[4]}
+        if not addresses:
+            raise ValueError("DNS lookup returned no addresses for the URL hostname.")
+        for address in addresses:
+            _reject_non_public_address(address, require_ip=True)
+    return url
+
+
+def normalize_urls_with_stats(
+    text: str,
+    *,
+    resolve_dns: bool = True,
+    resolver: Optional[Callable[..., Any]] = None,
+) -> tuple[list[str], int]:
+    """Return validated URL lines plus the number collapsed as duplicates."""
     urls: list[str] = []
     seen: set[str] = set()
     duplicates = 0
-    for raw_line in text.replace("\r\n", "\n").split("\n"):
-        line = raw_line.strip()
-        if not line or line.startswith("#") or not URL_RE.match(line):
+    invalid: list[str] = []
+    for line_number, raw_line in enumerate(text.replace("\r\n", "\n").split("\n"), 1):
+        candidate = raw_line.strip()
+        if not candidate or candidate.startswith("#"):
+            continue
+        try:
+            line = validate_public_url(raw_line, resolve_dns=resolve_dns, resolver=resolver)
+        except ValueError as exc:
+            invalid.append(f"line {line_number}: {exc}")
             continue
         key = canonical_url_key(line)
         if key in seen:
@@ -428,33 +516,46 @@ def normalize_urls_with_stats(text: str) -> tuple[list[str], int]:
             continue
         urls.append(line)
         seen.add(key)
+    if invalid:
+        raise ValueError("Rejected URL input: " + "; ".join(invalid[:3]))
     return urls, duplicates
 
 
-def normalize_urls(text: str) -> list[str]:
-    """Split text into URL-looking lines and collapse equivalent duplicates."""
-    return normalize_urls_with_stats(text)[0]
+def normalize_urls(
+    text: str,
+    *,
+    resolve_dns: bool = True,
+    resolver: Optional[Callable[..., Any]] = None,
+) -> list[str]:
+    """Split text into public URL lines and collapse equivalent duplicates."""
+    return normalize_urls_with_stats(text, resolve_dns=resolve_dns, resolver=resolver)[0]
 
 
-def normalize_cli_urls(values: Iterable[str]) -> list[str]:
-    """Validate and identity-deduplicate CLI URL arguments."""
+def normalize_cli_urls(
+    values: Iterable[str],
+    *,
+    resolve_dns: bool = True,
+    resolver: Optional[Callable[..., Any]] = None,
+) -> list[str]:
+    """Validate public CLI URL arguments and identity-deduplicate them."""
     urls: list[str] = []
     seen: set[str] = set()
     invalid: list[str] = []
-    for raw in values:
-        value = str(raw or "").strip()
-        if not value:
+    for argument_number, raw in enumerate(values, 1):
+        raw_value = str(raw or "")
+        if not raw_value.strip():
             continue
-        if not URL_RE.match(value):
-            invalid.append(value[:80])
+        try:
+            value = validate_public_url(raw_value, resolve_dns=resolve_dns, resolver=resolver)
+        except ValueError as exc:
+            invalid.append(f"argument {argument_number}: {exc}")
             continue
         key = canonical_url_key(value)
         if key not in seen:
             urls.append(value)
             seen.add(key)
     if invalid:
-        preview = ", ".join(redact_text(item) for item in invalid[:3])
-        raise ValueError(f"Only http, https, and ftp URL arguments are accepted; rejected: {preview}")
+        raise ValueError("Rejected URL argument: " + "; ".join(invalid[:3]))
     return urls
 
 def parse_rate_limit(text: str) -> Optional[int]:
@@ -2978,7 +3079,7 @@ def launcher_snapshot(run_context: dict[str, Any]) -> dict[str, Any]:
 def effective_input_snapshot(settings: dict[str, Any], jobs_summary: dict[str, Any]) -> dict[str, Any]:
     redacted_settings = redact_for_export(settings)
     input_contract_registry = {
-        "download_urls": {"source": "GUI or CLI", "sensitivity": "sensitive", "validation": "http/https/ftp allowlist and deduplication", "destination": "yt-dlp URL list", "confirmation": "success plus final-media verification"},
+        "download_urls": {"source": "GUI or CLI", "sensitivity": "sensitive", "validation": "public http/https/ftp target preflight, resolved-address check, and identity deduplication", "destination": "yt-dlp URL list", "confirmation": "isolated-worker recheck plus final-media verification"},
         "output_dir": {"source": "GUI/CLI/default", "sensitivity": "sensitive local path", "validation": "environment/~ expansion, relative-to-app-root normalization, file-vs-folder rejection, and disk preflight", "destination": "yt-dlp output template"},
         "format_settings": {"source": "mode/height/custom/MP4 plus helper detection", "validation": "fixed modes; no-FFmpeg merge avoidance; selected format availability check", "destination": "yt-dlp format and postprocessors", "confirmation": "exact format plan captured before bytes transfer"},
         "rate_limit_bytes": {"source": "GUI or CLI", "validation": "positive K/M/G bytes/s", "destination": "yt-dlp ratelimit and fragment concurrency=1 when set"},
@@ -4073,8 +4174,7 @@ def run_isolated_worker(spec_path: Path) -> int:
         task = str(spec.get("task") or "")
         url = str(spec.get("url") or "")
         item_id = str(spec.get("item_id") or "worker")
-        if not URL_RE.match(url):
-            raise ValueError("worker URL must use a supported network scheme")
+        url = validate_public_url(url)
         settings = settings_from_worker_payload(dict(spec.get("settings") or {}))
         cancel_marker = Path(str(spec.get("cancel_marker") or "")).expanduser().resolve()
         if cancel_marker.parent != worker_task_dir().resolve():
@@ -4686,7 +4786,12 @@ class SafeMediaDownloaderApp(_TkBase):
 
     def add_urls(self) -> None:
         text = self.url_text.get("1.0", "end")
-        urls, pasted_duplicates = normalize_urls_with_stats(text)
+        try:
+            urls, pasted_duplicates = normalize_urls_with_stats(text)
+        except ValueError as exc:
+            self._log("warning", "Rejected one or more URL entries during public-network preflight.")
+            messagebox.showerror(APP_NAME, str(exc))
+            return
         if not urls:
             messagebox.showinfo(APP_NAME, "Paste one or more URL lines first. Only http, https, and ftp URLs are accepted.")
             return
@@ -4766,7 +4871,7 @@ class SafeMediaDownloaderApp(_TkBase):
         if selection:
             values = self.tree.item(selection[0], "values")
             if values:
-                return str(values[0])
+                return validate_public_url(str(values[0]))
         urls = normalize_urls(self.url_text.get("1.0", "end"))
         return urls[0] if urls else None
 
@@ -4990,7 +5095,12 @@ class SafeMediaDownloaderApp(_TkBase):
         self._log("warning", "Force Stop requested. The active worker process tree will be terminated immediately; resumable .part data will be preserved.")
 
     def list_formats(self) -> None:
-        url = self._selected_or_first_url()
+        try:
+            url = self._selected_or_first_url()
+        except ValueError as exc:
+            self._log("warning", "Rejected a URL during public-network preflight.")
+            messagebox.showerror(APP_NAME, str(exc))
+            return
         if not url:
             messagebox.showinfo(APP_NAME, "Select a queued URL or paste a URL first.")
             return
