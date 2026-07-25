@@ -51,9 +51,9 @@ except Exception as exc:  # CLI diagnostics/path checks must survive GUI-runtime
     TK_IMPORT_ERROR = exc
 
 APP_NAME = "Safe Video Downloader"
-APP_VERSION = "1.14.1"
+APP_VERSION = "1.14.2"
 EXPORT_SCHEMA_VERSION = 4
-DIAGNOSTIC_EXPORT_SCHEMA_VERSION = "1.14.1"
+DIAGNOSTIC_EXPORT_SCHEMA_VERSION = "1.14.2"
 DIAGNOSTIC_MAX_FILES = 20
 DIAGNOSTIC_LOG_TAIL_LIMIT = 250
 QUEUE_CAPACITY = 500
@@ -112,6 +112,7 @@ WORKER_SPEC_MAX_BYTES = 1 * 1024 * 1024
 CANCEL_POLL_SECONDS = 0.10
 CANCEL_GRACE_SECONDS = 2.0
 CANCEL_FORCE_WAIT_SECONDS = 3.0
+DOWNLOAD_NO_PROGRESS_TIMEOUT_SECONDS = 5.0
 WORKER_EVENT_PREFIX = "SVD_EVENT:"
 DUPLICATE_TRACKING_QUERY_KEYS = frozenset({"feature", "pp", "si"})
 YOUTUBE_HOSTS = frozenset({"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com", "youtu.be", "www.youtu.be"})
@@ -142,6 +143,10 @@ ASSET_DEFINITIONS: tuple[dict[str, Any], ...] = (
 
 class DownloadCancelled(Exception):
     """Raised inside yt-dlp hooks when the user presses Stop."""
+
+
+class DownloadNoProgressTimeout(Exception):
+    """Raised when an isolated download worker produces no activity for the configured timeout."""
 
 
 @dataclass(frozen=True)
@@ -826,6 +831,12 @@ def retry_policy_snapshot(rate_limited: bool = False, smart_resilience: bool = S
             "process_tree_termination": True,
             "partial_resume_preserved": True,
         },
+        "no_progress_timeout": {
+            "enabled": DOWNLOAD_NO_PROGRESS_TIMEOUT_SECONDS > 0,
+            "seconds": DOWNLOAD_NO_PROGRESS_TIMEOUT_SECONDS,
+            "scope": "download worker activity only; disabled during post-processing",
+            "action": "terminate worker process tree and preserve resumable .part files",
+        },
         "smart_resilience": {
             "enabled": bool(smart_resilience),
             "outer_attempts": SMART_OUTER_ATTEMPTS if smart_resilience else 1,
@@ -1076,6 +1087,8 @@ def apply_media_visibility(path: Path, hide: bool = HIDE_MEDIA_DEFAULT) -> dict[
 
 def classify_download_error(exc: BaseException) -> str:
     text = str(exc).lower()
+    if isinstance(exc, DownloadNoProgressTimeout):
+        return "no_progress_timeout"
     if isinstance(exc, DownloadCancelled) or "cancel" in text:
         return "cancelled"
     if any(token in text for token in ("http error 429", "too many requests", "rate limit", "ratelimit", "server throttling", "throttled")):
@@ -1760,6 +1773,7 @@ def settings_to_export(settings: DownloadSettings) -> dict[str, Any]:
         "ffmpeg_location": settings.ffmpeg_location,
         "hide_media": settings.hide_media,
         "smart_resilience": settings.smart_resilience,
+        "download_no_progress_timeout_seconds": DOWNLOAD_NO_PROGRESS_TIMEOUT_SECONDS,
         "format_selector": build_format_selector(settings),
     }
 
@@ -4311,6 +4325,12 @@ def execute_isolated_worker_task(
     cancellation_requested_at: Optional[float] = None
     hard_cancelled = False
     interrupted = False
+    timeout_triggered = False
+    timeout_triggered_at: Optional[float] = None
+    last_activity_at = time.monotonic()
+    last_activity_kind = "worker_start"
+    activity_events = 0
+    watchdog_armed = task == "download" and DOWNLOAD_NO_PROGRESS_TIMEOUT_SECONDS > 0
 
     def reader() -> None:
         try:
@@ -4329,6 +4349,8 @@ def execute_isolated_worker_task(
             "task": task,
             "cancel_grace_seconds": CANCEL_GRACE_SECONDS,
             "partial_resume_policy": "yt-dlp .part files are preserved for a later resume",
+            "no_progress_timeout_seconds": DOWNLOAD_NO_PROGRESS_TIMEOUT_SECONDS if task == "download" else None,
+            "no_progress_timeout_scope": "disabled after byte transfer enters post-processing",
         }
         reader_thread = threading.Thread(target=reader, daemon=True, name=f"{task}-worker-reader")
         reader_thread.start()
@@ -4339,13 +4361,49 @@ def execute_isolated_worker_task(
             except queue.Empty:
                 line = ""
             if line:
+                now_activity = time.monotonic()
+                last_activity_at = now_activity
+                activity_events += 1
                 event = parse_worker_event_line(line)
                 if event is None:
+                    last_activity_kind = "worker_output"
                     ui_queue.put(("log", "debug", redact_text(line)))
                 elif event[0] == "worker_terminal" and len(event) > 1 and isinstance(event[1], dict):
+                    last_activity_kind = "worker_terminal"
                     terminal = dict(event[1])
                 else:
+                    last_activity_kind = str(event[0])
+                    if event[0] == "job_status" and len(event) > 2 and str(event[2]).lower() == "processing":
+                        watchdog_armed = False
+                    elif event[0] == "progress" and len(event) > 2 and "post-processing" in str(event[2]).lower():
+                        watchdog_armed = False
                     ui_queue.put(event)
+
+            if (
+                watchdog_armed
+                and not timeout_triggered
+                and cancellation_requested_at is None
+                and proc.poll() is None
+                and time.monotonic() - last_activity_at >= DOWNLOAD_NO_PROGRESS_TIMEOUT_SECONDS
+            ):
+                timeout_triggered = True
+                timeout_triggered_at = time.monotonic()
+                idle_seconds = round(timeout_triggered_at - last_activity_at, 3)
+                termination = terminate_process_tree(proc)
+                telemetry.setdefault("worker_process", {})["termination"] = termination
+                telemetry["download_timeout"] = {
+                    "triggered": True,
+                    "mode": "no_progress",
+                    "threshold_seconds": DOWNLOAD_NO_PROGRESS_TIMEOUT_SECONDS,
+                    "idle_seconds": idle_seconds,
+                    "last_activity_kind": last_activity_kind,
+                    "activity_events_seen": activity_events,
+                    "resumable_partial_preserved": True,
+                    "post_processing_excluded": True,
+                    "termination": termination,
+                }
+                ui_queue.put(("job_status", item_id, "Timed out"))
+                ui_queue.put(("log", "warning", f"Download timed out after {DOWNLOAD_NO_PROGRESS_TIMEOUT_SECONDS:.0f}s without worker activity. The worker process tree was stopped and resumable partial data was preserved."))
 
             if stop_event.is_set() and cancellation_requested_at is None:
                 cancellation_requested_at = time.monotonic()
@@ -4394,6 +4452,14 @@ def execute_isolated_worker_task(
             cancel_marker.unlink(missing_ok=True)
         except OSError:
             pass
+
+    if timeout_triggered:
+        timeout_record = telemetry.setdefault("download_timeout", {})
+        timeout_record["worker_exit_code"] = proc.returncode if proc is not None else None
+        timeout_record["elapsed_after_trigger_seconds"] = round(time.monotonic() - timeout_triggered_at, 3) if timeout_triggered_at is not None else None
+        raise DownloadNoProgressTimeout(
+            f"Download made no worker progress for {DOWNLOAD_NO_PROGRESS_TIMEOUT_SECONDS:.0f} seconds"
+        )
 
     if stop_event.is_set() or interrupted or (terminal and terminal.get("outcome") == "cancelled"):
         latency = None

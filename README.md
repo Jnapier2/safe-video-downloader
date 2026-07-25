@@ -27,6 +27,7 @@ The tool does **not** bypass DRM, authentication, paywalls, access controls, or 
 - User-provided URLs are passed to the `yt-dlp` Python API, not interpolated into a shell command.
 - Adaptive retry profiles respond to transient network, stale-session, and rate-limit conditions with bounded backoff.
 - Downloads run in an isolated worker process so stop and force-stop actions remain predictable.
+- A five-second no-progress watchdog terminates a silent download worker, preserves resumable partial files, and disarms when post-processing begins.
 - Duplicate detection normalizes harmless tracking differences while preserving the original requested URL.
 - Diagnostic exports redact URLs, credentials, email addresses, user paths, and local network details.
 
