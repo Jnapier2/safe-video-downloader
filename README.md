@@ -66,4 +66,10 @@ Tests cover the offline public-URL boundary, URL identity, rate-limit parsing, r
 - Public-network preflight is a defense-in-depth check of submitted targets. Redirects, extractor-discovered subresources, and DNS changes occur after validation, so the application should run without access to sensitive internal services.
 - This project does not guarantee that a URL is lawful to download; the user must verify rights and applicable terms.
 - No downloaded media, browser profile, cookies, credentials, executable build, or private diagnostic bundle is included in this repository.
-- The source remains copyright-protected; see [LICENSE.md](LICENSE.md).
+- Source and documentation terms are defined in [LICENSE.md](LICENSE.md).
+
+## Portfolio and rights
+
+[Portfolio](https://jerry-napier-portfolio.netlify.app/) · [GitHub profile](https://github.com/Jnapier2)
+
+Copyright © 2026 Gateway Information Group LLC. All rights reserved. Third-party components and services retain their own rights and terms.
