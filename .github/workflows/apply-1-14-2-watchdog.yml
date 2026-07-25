@@ -1,0 +1,264 @@
+name: Apply reviewed 1.14.2 no-progress watchdog
+
+on:
+  push:
+    branches: [agent/reconcile-1-14-2-watchdog]
+    paths:
+      - .github/workflows/apply-1-14-2-watchdog.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/apply-1-14-2-watchdog.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-svd-1-14-2-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    if: github.repository == 'Jnapier2/safe-video-downloader'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out exact reconciliation branch
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: agent/reconcile-1-14-2-watchdog
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Apply bounded security-preserving patch
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          source_path = Path('safe_media_downloader.py')
+          text = source_path.read_text(encoding='utf-8')
+
+          def replace_once(old: str, new: str, label: str) -> None:
+              global text
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly one match, found {count}')
+              text = text.replace(old, new, 1)
+
+          replace_once('APP_VERSION = "1.14.1"', 'APP_VERSION = "1.14.2"', 'app version')
+          replace_once('DIAGNOSTIC_EXPORT_SCHEMA_VERSION = "1.14.1"', 'DIAGNOSTIC_EXPORT_SCHEMA_VERSION = "1.14.2"', 'diagnostic version')
+          replace_once(
+              'CANCEL_FORCE_WAIT_SECONDS = 3.0\nWORKER_EVENT_PREFIX = "SVD_EVENT:"',
+              'CANCEL_FORCE_WAIT_SECONDS = 3.0\nDOWNLOAD_NO_PROGRESS_TIMEOUT_SECONDS = 5.0\nWORKER_EVENT_PREFIX = "SVD_EVENT:"',
+              'watchdog constant',
+          )
+          replace_once(
+              'class DownloadCancelled(Exception):\n    """Raised inside yt-dlp hooks when the user presses Stop."""\n\n\n@dataclass(frozen=True)',
+              'class DownloadCancelled(Exception):\n    """Raised inside yt-dlp hooks when the user presses Stop."""\n\n\nclass DownloadNoProgressTimeout(Exception):\n    """Raised when an isolated download worker produces no activity for the configured timeout."""\n\n\n@dataclass(frozen=True)',
+              'watchdog exception',
+          )
+          replace_once(
+              '        "cancellation": {\n            "isolated_worker_process": True,\n            "cooperative_marker": True,\n            "automatic_hard_stop_after_seconds": CANCEL_GRACE_SECONDS,\n            "second_click_force_stop": True,\n            "process_tree_termination": True,\n            "partial_resume_preserved": True,\n        },\n        "smart_resilience": {',
+              '        "cancellation": {\n            "isolated_worker_process": True,\n            "cooperative_marker": True,\n            "automatic_hard_stop_after_seconds": CANCEL_GRACE_SECONDS,\n            "second_click_force_stop": True,\n            "process_tree_termination": True,\n            "partial_resume_preserved": True,\n        },\n        "no_progress_timeout": {\n            "enabled": DOWNLOAD_NO_PROGRESS_TIMEOUT_SECONDS > 0,\n            "seconds": DOWNLOAD_NO_PROGRESS_TIMEOUT_SECONDS,\n            "scope": "download worker activity only; disabled during post-processing",\n            "action": "terminate worker process tree and preserve resumable .part files",\n        },\n        "smart_resilience": {',
+              'retry policy',
+          )
+          replace_once(
+              'def classify_download_error(exc: BaseException) -> str:\n    text = str(exc).lower()\n    if isinstance(exc, DownloadCancelled) or "cancel" in text:',
+              'def classify_download_error(exc: BaseException) -> str:\n    text = str(exc).lower()\n    if isinstance(exc, DownloadNoProgressTimeout):\n        return "no_progress_timeout"\n    if isinstance(exc, DownloadCancelled) or "cancel" in text:',
+              'error classification',
+          )
+          replace_once(
+              '        "smart_resilience": settings.smart_resilience,\n        "format_selector": build_format_selector(settings),',
+              '        "smart_resilience": settings.smart_resilience,\n        "download_no_progress_timeout_seconds": DOWNLOAD_NO_PROGRESS_TIMEOUT_SECONDS,\n        "format_selector": build_format_selector(settings),',
+              'settings export',
+          )
+          replace_once(
+              '    hard_cancelled = False\n    interrupted = False\n\n    def reader() -> None:',
+              '    hard_cancelled = False\n    interrupted = False\n    timeout_triggered = False\n    timeout_triggered_at: Optional[float] = None\n    last_activity_at = time.monotonic()\n    last_activity_kind = "worker_start"\n    activity_events = 0\n    watchdog_armed = task == "download" and DOWNLOAD_NO_PROGRESS_TIMEOUT_SECONDS > 0\n\n    def reader() -> None:',
+              'watchdog state',
+          )
+          replace_once(
+              '            "cancel_grace_seconds": CANCEL_GRACE_SECONDS,\n            "partial_resume_policy": "yt-dlp .part files are preserved for a later resume",\n        }',
+              '            "cancel_grace_seconds": CANCEL_GRACE_SECONDS,\n            "partial_resume_policy": "yt-dlp .part files are preserved for a later resume",\n            "no_progress_timeout_seconds": DOWNLOAD_NO_PROGRESS_TIMEOUT_SECONDS if task == "download" else None,\n            "no_progress_timeout_scope": "disabled after byte transfer enters post-processing",\n        }',
+              'worker telemetry',
+          )
+          replace_once(
+              '            if line:\n                event = parse_worker_event_line(line)\n                if event is None:\n                    ui_queue.put(("log", "debug", redact_text(line)))\n                elif event[0] == "worker_terminal" and len(event) > 1 and isinstance(event[1], dict):\n                    terminal = dict(event[1])\n                else:\n                    ui_queue.put(event)\n\n            if stop_event.is_set() and cancellation_requested_at is None:',
+              '            if line:\n                now_activity = time.monotonic()\n                last_activity_at = now_activity\n                activity_events += 1\n                event = parse_worker_event_line(line)\n                if event is None:\n                    last_activity_kind = "worker_output"\n                    ui_queue.put(("log", "debug", redact_text(line)))\n                elif event[0] == "worker_terminal" and len(event) > 1 and isinstance(event[1], dict):\n                    last_activity_kind = "worker_terminal"\n                    terminal = dict(event[1])\n                else:\n                    last_activity_kind = str(event[0])\n                    if event[0] == "job_status" and len(event) > 2 and str(event[2]).lower() == "processing":\n                        watchdog_armed = False\n                    elif event[0] == "progress" and len(event) > 2 and "post-processing" in str(event[2]).lower():\n                        watchdog_armed = False\n                    ui_queue.put(event)\n\n            if (\n                watchdog_armed\n                and not timeout_triggered\n                and cancellation_requested_at is None\n                and proc.poll() is None\n                and time.monotonic() - last_activity_at >= DOWNLOAD_NO_PROGRESS_TIMEOUT_SECONDS\n            ):\n                timeout_triggered = True\n                timeout_triggered_at = time.monotonic()\n                idle_seconds = round(timeout_triggered_at - last_activity_at, 3)\n                termination = terminate_process_tree(proc)\n                telemetry.setdefault("worker_process", {})["termination"] = termination\n                telemetry["download_timeout"] = {\n                    "triggered": True,\n                    "mode": "no_progress",\n                    "threshold_seconds": DOWNLOAD_NO_PROGRESS_TIMEOUT_SECONDS,\n                    "idle_seconds": idle_seconds,\n                    "last_activity_kind": last_activity_kind,\n                    "activity_events_seen": activity_events,\n                    "resumable_partial_preserved": True,\n                    "post_processing_excluded": True,\n                    "termination": termination,\n                }\n                ui_queue.put(("job_status", item_id, "Timed out"))\n                ui_queue.put(("log", "warning", f"Download timed out after {DOWNLOAD_NO_PROGRESS_TIMEOUT_SECONDS:.0f}s without worker activity. The worker process tree was stopped and resumable partial data was preserved."))\n\n            if stop_event.is_set() and cancellation_requested_at is None:',
+              'worker event loop',
+          )
+          replace_once(
+              '    if stop_event.is_set() or interrupted or (terminal and terminal.get("outcome") == "cancelled"):',
+              '    if timeout_triggered:\n        timeout_record = telemetry.setdefault("download_timeout", {})\n        timeout_record["worker_exit_code"] = proc.returncode if proc is not None else None\n        timeout_record["elapsed_after_trigger_seconds"] = round(time.monotonic() - timeout_triggered_at, 3) if timeout_triggered_at is not None else None\n        raise DownloadNoProgressTimeout(\n            f"Download made no worker progress for {DOWNLOAD_NO_PROGRESS_TIMEOUT_SECONDS:.0f} seconds"\n        )\n\n    if stop_event.is_set() or interrupted or (terminal and terminal.get("outcome") == "cancelled"):',
+              'watchdog terminal result',
+          )
+
+          source_path.write_text(text, encoding='utf-8', newline='\n')
+
+          readme_path = Path('README.md')
+          readme = readme_path.read_text(encoding='utf-8')
+          marker = '- Downloads run in an isolated worker process so stop and force-stop actions remain predictable.\n'
+          addition = marker + '- A five-second no-progress watchdog terminates a silent download worker, preserves resumable partial files, and disarms when post-processing begins.\n'
+          if readme.count(marker) != 1:
+              raise SystemExit('README watchdog insertion point is not unique')
+          readme = readme.replace(marker, addition, 1)
+          readme_path.write_text(readme, encoding='utf-8', newline='\n')
+
+          test_path = Path('tests/test_no_progress_timeout.py')
+          test_path.write_text(r'''from __future__ import annotations
+
+import queue
+import sys
+import tempfile
+import threading
+import time
+import unittest
+from pathlib import Path
+from unittest import mock
+
+import safe_media_downloader as svd
+
+
+def make_settings(output_dir: Path) -> svd.DownloadSettings:
+    return svd.DownloadSettings(
+        output_dir=output_dir,
+        mode="Video (best MP4)",
+        max_height=1080,
+        custom_format="",
+        include_playlist=False,
+        embed_metadata=False,
+        write_subtitles=False,
+        restrict_filenames=True,
+        use_archive=True,
+        rate_limit_bytes=None,
+        prefer_mp4=True,
+        ffmpeg_location=None,
+        hide_media=False,
+        smart_resilience=True,
+    )
+
+
+class NoProgressWatchdogTests(unittest.TestCase):
+    def test_policy_and_export_expose_five_second_timeout(self) -> None:
+        self.assertEqual(svd.APP_VERSION, "1.14.2")
+        self.assertEqual(svd.DOWNLOAD_NO_PROGRESS_TIMEOUT_SECONDS, 5.0)
+        policy = svd.retry_policy_snapshot()["no_progress_timeout"]
+        self.assertTrue(policy["enabled"])
+        self.assertEqual(policy["seconds"], 5.0)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            exported = svd.settings_to_export(make_settings(Path(tmpdir)))
+        self.assertEqual(exported["download_no_progress_timeout_seconds"], 5.0)
+
+    def test_silent_download_worker_times_out_and_preserves_partial_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            telemetry: dict[str, object] = {}
+            with mock.patch.object(svd, "worker_task_dir", return_value=root / "worker"), \
+                 mock.patch.object(svd, "worker_command", return_value=[sys.executable, "-c", "import time; time.sleep(30)"]), \
+                 mock.patch.object(svd, "DOWNLOAD_NO_PROGRESS_TIMEOUT_SECONDS", 0.25):
+                started = time.monotonic()
+                with self.assertRaises(svd.DownloadNoProgressTimeout):
+                    svd.execute_isolated_worker_task(
+                        "download",
+                        "https://example.com/video",
+                        make_settings(root / "output"),
+                        queue.Queue(),
+                        "timeout-probe",
+                        threading.Event(),
+                        telemetry,
+                        svd.AdaptiveRunState(),
+                        threading.Event(),
+                    )
+            self.assertLess(time.monotonic() - started, 4.0)
+            timeout = telemetry["download_timeout"]
+            self.assertTrue(timeout["triggered"])
+            self.assertTrue(timeout["resumable_partial_preserved"])
+            self.assertEqual(svd.classify_download_error(svd.DownloadNoProgressTimeout("timeout")), "no_progress_timeout")
+
+    def test_worker_activity_resets_timeout(self) -> None:
+        script = (
+            "import json,time; "
+            "[(print('SVD_EVENT:'+json.dumps(['progress',1.0,'tick']),flush=True),time.sleep(0.10)) for _ in range(5)]; "
+            "print('SVD_EVENT:'+json.dumps(['worker_terminal',{'outcome':'success','exit_code':0,'telemetry':{}}]),flush=True)"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            with mock.patch.object(svd, "worker_task_dir", return_value=root / "worker"), \
+                 mock.patch.object(svd, "worker_command", return_value=[sys.executable, "-c", script]), \
+                 mock.patch.object(svd, "DOWNLOAD_NO_PROGRESS_TIMEOUT_SECONDS", 0.25):
+                result = svd.execute_isolated_worker_task(
+                    "download",
+                    "https://example.com/video",
+                    make_settings(root / "output"),
+                    queue.Queue(),
+                    "activity-probe",
+                    threading.Event(),
+                    {},
+                    svd.AdaptiveRunState(),
+                    threading.Event(),
+                )
+        self.assertEqual(result, 0)
+
+    def test_processing_event_disarms_watchdog(self) -> None:
+        script = (
+            "import json,time; "
+            "print('SVD_EVENT:'+json.dumps(['job_status','job1','Processing']),flush=True); "
+            "time.sleep(0.50); "
+            "print('SVD_EVENT:'+json.dumps(['worker_terminal',{'outcome':'success','exit_code':0,'telemetry':{}}]),flush=True)"
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            with mock.patch.object(svd, "worker_task_dir", return_value=root / "worker"), \
+                 mock.patch.object(svd, "worker_command", return_value=[sys.executable, "-c", script]), \
+                 mock.patch.object(svd, "DOWNLOAD_NO_PROGRESS_TIMEOUT_SECONDS", 0.25):
+                result = svd.execute_isolated_worker_task(
+                    "download",
+                    "https://example.com/video",
+                    make_settings(root / "output"),
+                    queue.Queue(),
+                    "processing-probe",
+                    threading.Event(),
+                    {},
+                    svd.AdaptiveRunState(),
+                    threading.Event(),
+                )
+        self.assertEqual(result, 0)
+
+
+if __name__ == "__main__":
+    unittest.main()
+''', encoding='utf-8', newline='\n')
+          PY
+
+      - name: Validate patched source
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          python -m compileall -q safe_media_downloader.py tests
+          python -m unittest discover -s tests -v
+          python - <<'PY'
+          import safe_media_downloader as svd
+          assert svd.APP_VERSION == '1.14.2'
+          assert svd.DOWNLOAD_NO_PROGRESS_TIMEOUT_SECONDS == 5.0
+          assert svd.retry_policy_snapshot()['no_progress_timeout']['seconds'] == 5.0
+          print('Safe Video Downloader 1.14.2 watchdog contract: PASS')
+          PY
+
+      - name: Remove temporary workflow and commit reviewed result
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rm -f .github/workflows/apply-1-14-2-watchdog.yml
+          git add -A
+          git diff --cached --check
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Release Safe Video Downloader 1.14.2 watchdog' \
+            -m 'Merge the verified five-second no-progress isolated-worker timeout into the stronger public-security source while preserving URL, destination, rights, duplicate, cancellation, and redaction controls.' \
+            -m 'Copyright © 2026 Gateway Information Group LLC. All rights reserved.'
+          git push origin HEAD:agent/reconcile-1-14-2-watchdog
+
+# Copyright © 2026 Gateway Information Group LLC. All rights reserved.
