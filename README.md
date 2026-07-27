@@ -33,7 +33,7 @@ The tool does **not** bypass DRM, authentication, paywalls, access controls, or 
 
 ## Quick start
 
-Requirements: Windows 10/11 and Python 3.11 or newer. FFmpeg is optional but recommended for format merging.
+Requirements: Windows 10/11 and Python 3.11–3.13. FFmpeg is optional but recommended for format merging.
 
 ```powershell
 py -3 -m venv .venv
