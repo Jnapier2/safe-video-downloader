@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import redirect_stdout
+from dataclasses import replace
 import io
 import unittest
 import sys
@@ -61,6 +62,43 @@ class SafetyBehaviorTests(unittest.TestCase):
 
     def test_downloaded_media_is_visible_by_default(self) -> None:
         self.assertFalse(HIDE_MEDIA_DEFAULT)
+
+    def test_media_signature_fallback_rejects_nonmedia_payload(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "not-media.bin"
+            path.write_bytes(b"this is an arbitrary nonempty payload")
+            with patch.object(app, "find_executable", return_value=None):
+                result = app.verify_media_file(path, self.default_video_settings(Path(tmpdir)))
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["method"], "signature")
+        self.assertIn("no supported media signature", result["reason"])
+
+    def test_media_signature_fallback_accepts_supported_video_and_audio_signatures(self) -> None:
+        fixtures = (
+            ("video.mp4", b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00isommp42", "Video (best MP4)", "ISO Base Media"),
+            ("video.webm", b"\x1a\x45\xdf\xa3\x9fB\x86\x81\x01", "Video (best MP4)", "EBML"),
+            ("audio.mp3", b"ID3\x04\x00\x00\x00\x00\x00\x00", "Audio (MP3)", "MP3"),
+            ("audio.flac", b"fLaC\x00\x00\x00\x22", "Audio (original/best)", "FLAC"),
+        )
+        with tempfile.TemporaryDirectory() as tmpdir, patch.object(app, "find_executable", return_value=None):
+            root = Path(tmpdir)
+            for name, payload, mode, signature_label in fixtures:
+                with self.subTest(name=name):
+                    path = root / name
+                    path.write_bytes(payload)
+                    settings = replace(self.default_video_settings(root), mode=mode)
+                    result = app.verify_media_file(path, settings)
+                    self.assertEqual(result["status"], "basic_ok")
+                    self.assertEqual(result["method"], "signature")
+                    self.assertIn(signature_label, result["signature"])
+
+    def test_mixed_batch_exit_code_is_three(self) -> None:
+        self.assertEqual(app.batch_exit_code([0, 1]), 3)
+        self.assertEqual(app.batch_exit_code([2, 0, 0]), 3)
+
+    def test_all_failed_batch_remains_failure(self) -> None:
+        self.assertEqual(app.batch_exit_code([1, 2]), 2)
+        self.assertNotEqual(app.batch_exit_code([1]), 0)
 
     def test_equivalent_youtube_urls_share_an_identity(self) -> None:
         short = "https://youtu.be/abc123XYZ00?si=tracking"

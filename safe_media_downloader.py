@@ -82,6 +82,7 @@ FILE_ACCESS_RETRIES = 3
 PROGRESS_UPDATE_SECONDS = 0.5
 PREFLIGHT_DISK_RESERVE_BYTES = 256 * 1024 * 1024
 FFPROBE_TIMEOUT_SECONDS = 20
+MEDIA_SIGNATURE_READ_BYTES = 4096
 SMART_RESILIENCE_DEFAULT = True
 HIDE_MEDIA_DEFAULT = False
 SMART_OUTER_ATTEMPTS = 2
@@ -957,8 +958,65 @@ def assess_disk_capacity(output_dir: Path, required_bytes: int) -> dict[str, Any
         return {"status": "unavailable", "required_bytes": int(required_bytes), "reason": redact_text(exc), "checked_path": str(parent)}
 
 
+def detect_media_signature(header: bytes) -> Optional[tuple[str, frozenset[str]]]:
+    """Return a supported container/codec signature and its possible stream types."""
+    both = frozenset({"audio", "video"})
+    audio = frozenset({"audio"})
+    video = frozenset({"video"})
+    if len(header) >= 12 and header[4:8] == b"ftyp":
+        return "ISO Base Media (MP4/M4A/MOV)", both
+    if header.startswith(b"\x1a\x45\xdf\xa3"):
+        return "EBML (WebM/Matroska)", both
+    if len(header) >= 12 and header.startswith(b"RIFF"):
+        riff_type = header[8:12]
+        if riff_type == b"WAVE":
+            return "RIFF/WAVE", audio
+        if riff_type == b"AVI ":
+            return "RIFF/AVI", video
+    if header.startswith(b"OggS"):
+        return "Ogg", both
+    if header.startswith(b"fLaC"):
+        return "FLAC", audio
+    if len(header) >= 12 and header.startswith(b"FORM") and header[8:12] in {b"AIFF", b"AIFC"}:
+        return "AIFF", audio
+    if header.startswith(b"#!AMR\n") or header.startswith(b"#!AMR-WB\n"):
+        return "AMR", audio
+    if header.startswith(b"wvpk"):
+        return "WavPack", audio
+    if header.startswith(b"MAC "):
+        return "Monkey's Audio", audio
+    if header.startswith((b"MPCK", b"MP+")):
+        return "Musepack", audio
+    if header.startswith(b"ID3") and len(header) >= 10 and header[3] != 0xFF and all(value < 0x80 for value in header[6:10]):
+        return "MP3 with ID3", audio
+    if len(header) >= 4 and header[0] == 0xFF and header[1] & 0xF6 == 0xF0:
+        return "AAC ADTS", audio
+    if len(header) >= 4 and header[0] == 0xFF and header[1] & 0xE0 == 0xE0:
+        version = (header[1] >> 3) & 0x03
+        layer = (header[1] >> 1) & 0x03
+        bitrate_index = (header[2] >> 4) & 0x0F
+        sample_rate_index = (header[2] >> 2) & 0x03
+        if version != 0x01 and layer != 0 and bitrate_index not in {0, 0x0F} and sample_rate_index != 0x03:
+            return "MPEG audio", audio
+    if header.startswith(b"\x0b\x77"):
+        return "AC-3", audio
+    if header.startswith((b"\x7f\xfe\x80\x01", b"\xfe\x7f\x01\x80")):
+        return "DTS", audio
+    if header.startswith((b"\x00\x00\x01\xba", b"\x00\x00\x01\xb3")):
+        return "MPEG video", video
+    if len(header) >= 377 and header[0] == header[188] == header[376] == 0x47:
+        return "MPEG transport stream", both
+    if header.startswith(b"FLV") and len(header) >= 4 and header[3] == 0x01:
+        return "Flash Video", both
+    if header.startswith(b".RMF"):
+        return "RealMedia", both
+    if header.startswith(b"\x30\x26\xb2\x75\x8e\x66\xcf\x11\xa6\xd9\x00\xaa\x00\x62\xce\x6c"):
+        return "ASF (WMA/WMV)", both
+    return None
+
+
 def verify_media_file(path: Path, settings: DownloadSettings, info: Optional[dict[str, Any]] = None, *, timeout: int = FFPROBE_TIMEOUT_SECONDS) -> dict[str, Any]:
-    """Verify a final file with ffprobe when available, otherwise basic I/O checks."""
+    """Verify a final file with ffprobe or a bounded media-signature fallback."""
     result: dict[str, Any] = {"path": str(path), "method": "basic", "status": "failed", "checked_at_utc": utc_now_iso()}
     try:
         if not path.is_file():
@@ -973,9 +1031,25 @@ def verify_media_file(path: Path, settings: DownloadSettings, info: Optional[dic
         result["reason"] = redact_text(exc)
         return result
 
+    expected = "audio" if settings.mode.startswith("Audio") else "video" if settings.mode.startswith("Video") else "any"
     ffprobe = find_executable("ffprobe")
     if not ffprobe:
-        result.update({"status": "basic_ok", "reason": "ffprobe not detected; existence and nonzero size verified"})
+        result.update({"method": "signature", "expected_stream": expected})
+        try:
+            with path.open("rb") as media_file:
+                signature = detect_media_signature(media_file.read(MEDIA_SIGNATURE_READ_BYTES))
+        except OSError as exc:
+            result["reason"] = redact_text(exc)
+            return result
+        if signature is None:
+            result["reason"] = "ffprobe not detected and no supported media signature was found"
+            return result
+        signature_name, media_types = signature
+        result.update({"signature": signature_name, "signature_media_types": sorted(media_types)})
+        if expected != "any" and expected not in media_types:
+            result["reason"] = f"recognized {signature_name} data does not support the expected {expected} output mode"
+            return result
+        result.update({"status": "basic_ok", "reason": f"ffprobe not detected; recognized {signature_name} media signature"})
         return result
     command = [
         str(ffprobe), "-v", "error", "-show_entries",
@@ -1001,7 +1075,6 @@ def verify_media_file(path: Path, settings: DownloadSettings, info: Optional[dic
     streams = payload.get("streams") if isinstance(payload, dict) else []
     streams = streams if isinstance(streams, list) else []
     stream_types = sorted({str(stream.get("codec_type")) for stream in streams if isinstance(stream, dict) and stream.get("codec_type")})
-    expected = "audio" if settings.mode.startswith("Audio") else "video" if settings.mode.startswith("Video") else "any"
     valid_stream = bool(stream_types) if expected == "any" else expected in stream_types
     duration_raw = (payload.get("format") or {}).get("duration") if isinstance(payload, dict) else None
     try:
@@ -1787,7 +1860,7 @@ def dependency_snapshot() -> dict[str, Any]:
         "javascript_runtime": js,
         "retry_policy": retry_policy_snapshot(smart_resilience=SMART_RESILIENCE_DEFAULT),
         "smart_preflight": {"enabled": True, "disk_reserve_bytes": PREFLIGHT_DISK_RESERVE_BYTES, "drm_fail_closed": True},
-        "final_media_verification": {"enabled": True, "ffprobe_timeout_seconds": FFPROBE_TIMEOUT_SECONDS, "basic_fallback": True},
+        "final_media_verification": {"enabled": True, "ffprobe_timeout_seconds": FFPROBE_TIMEOUT_SECONDS, "basic_fallback": False, "media_signature_fallback": True},
         "media_visibility": {"default_hidden_on_windows": HIDE_MEDIA_DEFAULT, "scope": "final downloaded media files only", "failure_policy": "warn and keep download successful"},
         "duplicate_detection": {"default_enabled": True, "media_index_schema": MEDIA_INDEX_SCHEMA_VERSION, "max_entries": MEDIA_INDEX_MAX_ENTRIES, "archive_file": "state/download-archive-<output-variant>.txt", "false_positive_guard": "mode/height/custom format/metadata/subtitle variant included in identity"},
         "cancellation": {
@@ -3399,7 +3472,7 @@ def smoke_risk_summary(settings: dict[str, Any], dependencies: dict[str, Any], c
         "known_limits": [
             "No live provider/status/documentation checks during export",
             "Size estimates may be unavailable or approximate",
-            "If ffprobe is absent, verification falls back to file existence/nonzero size",
+            "If ffprobe is absent, verification falls back to bounded supported-media signature checks",
         ],
     }
 
@@ -5417,6 +5490,15 @@ def run_gui() -> int:
         gui_log("info", "GUI instance lock released.")
 
 
+def batch_exit_code(exit_codes: Iterable[int]) -> int:
+    """Resolve completed batch results without hiding partial failure."""
+    codes = [int(code) for code in exit_codes]
+    failures = [code for code in codes if code != 0]
+    if failures and len(failures) != len(codes):
+        return 3
+    return max(failures, default=0)
+
+
 def run_cli(argv: Optional[Iterable[str]] = None) -> int:
     """Lawful-use CLI with the same integrity/recovery policies as the GUI."""
     prepend_tools_to_path()
@@ -5566,6 +5648,7 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
     stop_event = threading.Event()
     force_stop_event = threading.Event()
     overall = 0
+    job_exit_codes: list[int] = []
     interrupted = False
     adaptive_state = AdaptiveRunState(enabled=settings.smart_resilience)
     cli_log("info", f"Smart reconnect/adaptive throttle: {'enabled' if settings.smart_resilience else 'disabled'}")
@@ -5593,7 +5676,7 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
             duplicate_state = telemetry.get("duplicate_detection") if isinstance(telemetry.get("duplicate_detection"), dict) else {}
             duplicate_skipped = duplicate_state.get("status") in {"duplicate", "archive_or_existing_output_skip"}
             job["status"] = "Skipped duplicate" if code == 0 and duplicate_skipped else ("Done" if code == 0 else "Failed")
-            overall = max(overall, code)
+            job_exit_codes.append(code)
         except (KeyboardInterrupt, DownloadCancelled):
             stop_event.set()
             interrupted = True
@@ -5613,7 +5696,7 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
             telemetry.update({"error_category": classify_download_error(exc), "elapsed_seconds": round(time.monotonic() - started, 3), "error": redact_text(exc)})
             job["result"] = telemetry
             job["status"] = "Failed"
-            overall = 1
+            job_exit_codes.append(1)
             cli_log("error", f"Download failed ({telemetry['error_category']}) for {url_log_label(str(job['url']))}: {redact_text(exc)}")
         while not q.empty():
             event = q.get_nowait()
@@ -5628,6 +5711,8 @@ def run_cli(argv: Optional[Iterable[str]] = None) -> int:
                 cli_log("warning", f"Report checkpoint failed after {job['item_id']}: {redact_text(exc)}")
         if interrupted:
             break
+    if not interrupted:
+        overall = batch_exit_code(job_exit_codes)
     cli_log("info" if overall == 0 else "error", f"CLI finished with exit code {overall}; elapsed={time.monotonic() - cli_start_monotonic:.2f}s")
     if report_path is not None:
         try:
