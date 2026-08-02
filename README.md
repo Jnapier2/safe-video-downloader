@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Jnapier2/safe-video-downloader/actions/workflows/ci.yml/badge.svg)](https://github.com/Jnapier2/safe-video-downloader/actions/workflows/ci.yml)
 
-A controlled Windows desktop and command-line workflow for retrieving media the user is authorized to retain. Shared planning across both interfaces, explicit rights confirmation, duplicate controls, isolated workers, bounded recovery, and post-download verification make repeated operations more predictable without exposing browser credentials or shelling out user-supplied URLs.
+A controlled Windows desktop and command-line workflow for retrieving media the user is authorized to retain. Shared planning across both interfaces, explicit rights confirmation, duplicate controls, isolated workers, bounded recovery, and post-download verification make repeated operations more predictable without exposing browser credentials or passing user-supplied URLs through a command shell.
 
 GUI and CLI jobs use the same planning and verification path. Format, capacity, duplicate, and final validation decisions stay consistent between desktop and scripted use.
 
@@ -59,7 +59,7 @@ python -m compileall -q safe_media_downloader.py tests
 python -m unittest discover -s tests -v
 ```
 
-Tests cover the offline public-URL boundary, URL identity, rate-limit parsing, redaction, and explicit visible-output defaults without downloading external media.
+Tests cover the offline public-URL boundary, URL identity, rate-limit parsing, redaction, media-signature fallback, batch exit policy, and explicit visible-output defaults without downloading external media.
 
 ## Boundaries
 
