@@ -127,6 +127,8 @@ TEXT_PORTABILITY_SCAN_FILES = (
     "SECURITY.md",
     "requirements.txt",
     "tests/test_safety_behavior.py",
+    "tests/test_no_progress_timeout.py",
+    "tests/test_project_local_launch.py",
 )
 
 ASSET_METADATA_SCHEMA_VERSION = "public-support-metadata-v1"
@@ -139,6 +141,8 @@ ASSET_DEFINITIONS: tuple[dict[str, Any], ...] = (
     {"asset_id": "SVD-SECURITY", "path": "SECURITY.md", "title": "Security policy", "purpose": "Vulnerability reporting guidance", "asset_class": "documentation", "role": "security", "format": "md", "status": "current", "sensitivity": "public", "source_of_truth": True, "tags": ["security"], "aliases": [], "metadata_depth": "file"},
     {"asset_id": "SVD-REQUIREMENTS", "path": "requirements.txt", "title": "Runtime dependencies", "purpose": "Pinned runtime dependency", "asset_class": "configuration", "role": "dependencies", "format": "txt", "status": "current", "sensitivity": "public", "source_of_truth": True, "tags": ["dependencies"], "aliases": [], "metadata_depth": "file"},
     {"asset_id": "SVD-TESTS", "path": "tests/test_safety_behavior.py", "title": "Safety behavior tests", "purpose": "Offline safety and parsing regression tests", "asset_class": "test", "role": "verification", "format": "py", "status": "current", "sensitivity": "public", "source_of_truth": False, "tags": ["tests"], "aliases": [], "metadata_depth": "file"},
+    {"asset_id": "SVD-WATCHDOG-TESTS", "path": "tests/test_no_progress_timeout.py", "title": "Worker watchdog tests", "purpose": "No-progress timeout and post-processing regression tests", "asset_class": "test", "role": "verification", "format": "py", "status": "current", "sensitivity": "public", "source_of_truth": False, "tags": ["tests", "watchdog"], "aliases": [], "metadata_depth": "file"},
+    {"asset_id": "SVD-LAUNCH-TESTS", "path": "tests/test_project_local_launch.py", "title": "Project-local launch tests", "purpose": "Canonical launcher and project-local output regression tests", "asset_class": "test", "role": "verification", "format": "py", "status": "current", "sensitivity": "public", "source_of_truth": False, "tags": ["tests", "launcher", "portability"], "aliases": [], "metadata_depth": "file"},
 )
 
 
@@ -343,7 +347,8 @@ def prepend_tools_to_path() -> None:
 
 
 def default_download_dir() -> Path:
-    return Path.home() / "Downloads" / APP_NAME.replace(" ", "")
+    """Return the project-local default media destination."""
+    return app_base_dir() / "downloads"
 
 
 def resolve_output_dir(value: Any) -> Path:
@@ -5078,13 +5083,10 @@ class SafeMediaDownloaderApp(_TkBase):
         initial_dir = exports_dir()
         try:
             initial_dir.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            try:
-                initial_dir = Path(self.output_dir_var.get()).expanduser()
-            except Exception:
-                initial_dir = default_download_dir()
-        if not initial_dir.exists():
-            initial_dir = Path.home()
+        except Exception as exc:
+            self._log("error", f"Project-local export folder is unavailable: {exc}")
+            messagebox.showerror(APP_NAME, f"Project-local export folder is unavailable:\n{exc}")
+            return
         chosen = filedialog.asksaveasfilename(
             title="Export report",
             initialdir=str(initial_dir),
@@ -5145,8 +5147,10 @@ class SafeMediaDownloaderApp(_TkBase):
         initial_dir = diagnostics_dir()
         try:
             initial_dir.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            initial_dir = Path.home()
+        except Exception as exc:
+            self._log("error", f"Project-local diagnostics folder is unavailable: {exc}")
+            messagebox.showerror(APP_NAME, f"Project-local diagnostics folder is unavailable:\n{exc}")
+            return
         chosen = filedialog.asksaveasfilename(
             title="Export program diagnostics",
             initialdir=str(initial_dir),
