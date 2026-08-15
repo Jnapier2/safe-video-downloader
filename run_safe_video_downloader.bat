@@ -35,7 +35,7 @@ if not defined PYTHON_EXE (
     exit /b 3
 )
 
-"%PYTHON_EXE%" %PYTHON_ARGS% -c "import sys; raise SystemExit(0 if sys.version_info ^>= (3, 11) else 1)" >nul 2>&1
+"%PYTHON_EXE%" %PYTHON_ARGS% -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)" >nul 2>&1
 if errorlevel 1 (
     echo ERROR: Python 3.11 or newer is required.
     exit /b 3
