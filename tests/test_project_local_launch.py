@@ -27,6 +27,8 @@ class ProjectLocalLaunchTests(unittest.TestCase):
         self.assertIn(r".venv\scripts\python.exe", text)
         self.assertIn('"%svd_script%" --gui', text)
         self.assertIn('"%svd_script%" %*', text)
+        self.assertIn("sys.version_info >= (3, 11)", text)
+        self.assertNotIn("sys.version_info ^>=", text)
         self.assertNotIn("executionpolicy bypass", text)
         root_launchers = sorted(
             path.name
