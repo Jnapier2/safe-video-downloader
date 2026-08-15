@@ -44,9 +44,14 @@ jobs:
           $caller = Join-Path $env:RUNNER_TEMP ("safe-video-foreign-cwd-" + "${{ matrix.python-version }}")
           New-Item -ItemType Directory -Path $caller -Force | Out-Null
           $output = Join-Path $env:GITHUB_WORKSPACE 'downloads'
-          $command = '"{0}\run_safe_video_downloader.bat" --path-check --output-dir "{1}"' -f $env:GITHUB_WORKSPACE, $output
-          $process = Start-Process -FilePath 'cmd.exe' -ArgumentList @('/d','/c',$command) -WorkingDirectory $caller -NoNewWindow -Wait -PassThru
-          if ($process.ExitCode -ne 0) { throw "Safe Video launcher smoke failed with exit code $($process.ExitCode)." }
+          Push-Location $caller
+          try {
+            & "$env:GITHUB_WORKSPACE\run_safe_video_downloader.bat" --path-check --output-dir $output
+            $launchExit = $LASTEXITCODE
+          } finally {
+            Pop-Location
+          }
+          if ($launchExit -ne 0) { throw "Safe Video launcher smoke failed with exit code $launchExit." }
           foreach ($name in @('downloads','logs','state','exports','diagnostics','tools')) {
             if (Test-Path -LiteralPath (Join-Path $caller $name)) {
               throw "Safe Video wrote $name under the caller working directory."
