@@ -38,5 +38,24 @@ jobs:
         run: python -m compileall -q safe_media_downloader.py tests
       - name: Test
         run: python -m unittest discover -s tests -v
+      - name: Launch from an unrelated working directory
+        shell: pwsh
+        run: |
+          $caller = Join-Path $env:RUNNER_TEMP ("safe-video-foreign-cwd-" + "${{ matrix.python-version }}")
+          New-Item -ItemType Directory -Path $caller -Force | Out-Null
+          $output = Join-Path $env:GITHUB_WORKSPACE 'downloads'
+          Push-Location $caller
+          try {
+            & "$env:GITHUB_WORKSPACE\run_safe_video_downloader.bat" --path-check --output-dir $output
+            $launchExit = $LASTEXITCODE
+          } finally {
+            Pop-Location
+          }
+          if ($launchExit -ne 0) { throw "Safe Video launcher smoke failed with exit code $launchExit." }
+          foreach ($name in @('downloads','logs','state','exports','diagnostics','tools')) {
+            if (Test-Path -LiteralPath (Join-Path $caller $name)) {
+              throw "Safe Video wrote $name under the caller working directory."
+            }
+          }
 
 # Copyright © 2026 Gateway Information Group LLC. All rights reserved.

@@ -15,6 +15,7 @@ The workflow is designed to keep authorized retrieval predictable and reviewable
 - keep completed media visible by default;
 - prevent repeat work through a download archive and media index;
 - atomically preserve only unfinished queue work for interruption recovery;
+- keep default downloads, logs, state, exports, and diagnostics under the project root;
 - validate completed output and record useful, redacted diagnostics;
 - stop active work responsively, including a bounded force-stop path.
 
@@ -39,18 +40,31 @@ Requirements: Windows 10/11 and Python 3.11–3.13. FFmpeg is optional but recom
 py -3 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install -r requirements.txt
-python safe_media_downloader.py --gui
+.\run_safe_video_downloader.bat
 ```
 
-The included `run_safe_video_downloader.bat` launches the GUI with an existing project virtual environment or a compatible Python installation. It never installs packages silently.
+The canonical `run_safe_video_downloader.bat` launcher derives its root from its own location, prefers the project virtual environment, verifies Python and `yt-dlp`, and opens the GUI when no arguments are supplied. Additional arguments are forwarded to the same Python CLI, so maintenance and scripted checks do not need a second launcher.
 
 For a CLI download, add the explicit rights acknowledgement:
 
 ```powershell
-python safe_media_downloader.py --i-have-rights --output-dir downloads "https://example.org/authorized-media"
+.\run_safe_video_downloader.bat --i-have-rights --output-dir downloads "https://example.org/authorized-media"
 ```
 
-Downloaded media is visible by default. `--hide-media` is an explicit Windows-only opt-in. Run `python safe_media_downloader.py --help` for the complete interface.
+Downloaded media is visible by default. `--hide-media` is an explicit Windows-only opt-in. Run `.\run_safe_video_downloader.bat --help` for the complete interface.
+
+## Project-local paths
+
+By default the application uses directories beneath the folder containing `safe_media_downloader.py`:
+
+- `downloads` — completed and resumable media;
+- `logs` — bounded application logs;
+- `state` — queue recovery, duplicate index, and worker state;
+- `exports` — general report exports;
+- `diagnostics` — redacted support diagnostics;
+- `tools` — optional project-local helper binaries.
+
+Relative output paths are resolved from the project root rather than the caller's working directory. A user may explicitly select another media or report destination through `--output-dir`, the GUI Browse control, or an export save dialog. If the managed project-local export or diagnostics folder cannot be prepared, the application reports the error instead of silently falling back to the user profile, Desktop, operating-system temporary storage, or caller working directory.
 
 ## Verification
 
@@ -59,7 +73,7 @@ python -m compileall -q safe_media_downloader.py tests
 python -m unittest discover -s tests -v
 ```
 
-Tests cover the offline public-URL boundary, URL identity, rate-limit parsing, redaction, media-signature fallback, batch exit policy, and explicit visible-output defaults without downloading external media.
+Tests cover the offline public-URL boundary, URL identity, rate-limit parsing, redaction, media-signature fallback, batch exit policy, worker timeout behavior, project-local output targeting, canonical-launcher behavior, and explicit visible-output defaults without downloading external media.
 
 ## Boundaries
 
