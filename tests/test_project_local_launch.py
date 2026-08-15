@@ -30,6 +30,8 @@ class ProjectLocalLaunchTests(unittest.TestCase):
         self.assertIn("sys.version_info >= (3, 11)", text)
         self.assertNotIn("sys.version_info ^>=", text)
         self.assertNotIn("executionpolicy bypass", text)
+        self.assertLess(text.index(r".venv\scripts\python.exe"), text.index("where python.exe"))
+        self.assertLess(text.index("where python.exe"), text.index("where py.exe"))
         root_launchers = sorted(
             path.name
             for path in PACKAGE_ROOT.iterdir()
