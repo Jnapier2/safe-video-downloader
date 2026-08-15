@@ -14,19 +14,29 @@ if not exist "%SVD_SCRIPT%" (
 
 set "PYTHON_EXE="
 set "PYTHON_ARGS="
-if exist "%~dp0.venv\Scripts\python.exe" set "PYTHON_EXE=%~dp0.venv\Scripts\python.exe"
 
-if not defined PYTHON_EXE (
-    where py.exe >nul 2>&1
-    if not errorlevel 1 (
-        set "PYTHON_EXE=py.exe"
-        set "PYTHON_ARGS=-3"
-    )
+if exist "%~dp0.venv\Scripts\python.exe" (
+    "%~dp0.venv\Scripts\python.exe" -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)" >nul 2>&1
+    if not errorlevel 1 set "PYTHON_EXE=%~dp0.venv\Scripts\python.exe"
 )
 
 if not defined PYTHON_EXE (
     where python.exe >nul 2>&1
-    if not errorlevel 1 set "PYTHON_EXE=python.exe"
+    if not errorlevel 1 (
+        python.exe -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)" >nul 2>&1
+        if not errorlevel 1 set "PYTHON_EXE=python.exe"
+    )
+)
+
+if not defined PYTHON_EXE (
+    where py.exe >nul 2>&1
+    if not errorlevel 1 (
+        py.exe -3 -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)" >nul 2>&1
+        if not errorlevel 1 (
+            set "PYTHON_EXE=py.exe"
+            set "PYTHON_ARGS=-3"
+        )
+    )
 )
 
 if not defined PYTHON_EXE (
@@ -35,15 +45,9 @@ if not defined PYTHON_EXE (
     exit /b 3
 )
 
-"%PYTHON_EXE%" %PYTHON_ARGS% -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 11) else 1)" >nul 2>&1
-if errorlevel 1 (
-    echo ERROR: Python 3.11 or newer is required.
-    exit /b 3
-)
-
 "%PYTHON_EXE%" %PYTHON_ARGS% -c "import yt_dlp" >nul 2>&1
 if errorlevel 1 (
-    echo ERROR: The project dependency is not installed.
+    echo ERROR: The project dependency is not installed for the selected Python runtime.
     echo Run: "%PYTHON_EXE%" %PYTHON_ARGS% -m pip install -r requirements.txt
     exit /b 4
 )
