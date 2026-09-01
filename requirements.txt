@@ -1,1 +1,1 @@
-yt-dlp[default]==2026.07.04
+yt-dlp[default]==2026.8.19
