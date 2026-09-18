@@ -37,11 +37,12 @@ The tool does **not** bypass DRM, authentication, paywalls, access controls, or 
 Requirements: Windows 10/11 and Python 3.11–3.13. FFmpeg is optional but recommended for format merging.
 
 ```powershell
-py -3 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
+py -3.13 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\run_safe_video_downloader.bat
 ```
+
+Run these commands from the extracted project folder. The example selects Python 3.13 explicitly; use `-3.11` or `-3.12` instead when that is your installed supported version. Install the requirements into the project environment before launching. No activation script or PowerShell execution-policy change is required.
 
 The canonical `run_safe_video_downloader.bat` launcher derives its root from its own location, prefers the project virtual environment, verifies Python and `yt-dlp`, and opens the GUI when no arguments are supplied. Additional arguments are forwarded to the same Python CLI, so maintenance and scripted checks do not need a second launcher.
 
@@ -69,8 +70,8 @@ Relative output paths are resolved from the project root rather than the caller'
 ## Verification
 
 ```powershell
-python -m compileall -q safe_media_downloader.py tests
-python -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe -m compileall -q safe_media_downloader.py tests
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
 Tests cover the offline public-URL boundary, URL identity, rate-limit parsing, redaction, media-signature fallback, batch exit policy, worker timeout behavior, project-local output targeting, canonical-launcher behavior, and explicit visible-output defaults without downloading external media.
